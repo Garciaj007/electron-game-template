@@ -9,62 +9,154 @@ import { remote } from 'electron';
 import { EffectComposer as THREE_EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer';
 import { RenderPass as THREE_RenderPass } from 'three/examples/jsm/postprocessing/RenderPass';
 import { UnrealBloomPass as THREE_BloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass';
-import { ThrottleSettings } from 'lodash';
-import { Box3 } from 'three';
 
 class Utils {
-    static random = (x: number, y:number) : number => {
+    static random = (x: number, y: number): number => {
         return Math.random() * (y - x) + x;
     }
-    static vectorConvert = (arr: Array<THREE.Vector2> | Array<Matter.Vector>) : Array<THREE.Vector2> | Array<Matter.Vector> => {
-        if(arr[0] instanceof THREE.Vector2)
-        {
-            let temp:Array<Matter.Vector> = [];
-            for(let elem of arr) temp.push(Matter.Vector.create(elem.x, elem.y));
+    static vectorConvert = (arr: Array<THREE.Vector2> | Array<Matter.Vector>): Array<THREE.Vector2> | Array<Matter.Vector> => {
+        if (arr[0] instanceof THREE.Vector2) {
+            let temp: Array<Matter.Vector> = [];
+            for (let elem of arr) temp.push(Matter.Vector.create(elem.x, elem.y));
             return temp;
-        } 
-        else
-        {
-            let temp:Array<THREE.Vector2> = [];
-            for(let elem of arr) temp.push(new THREE.Vector2(elem.x, elem.y));
+        }
+        else {
+            let temp: Array<THREE.Vector2> = [];
+            for (let elem of arr) temp.push(new THREE.Vector2(elem.x, elem.y));
             return temp;
         }
     }
 };
 
-class Shape
-{
+// Component Model Architecure
+// Component    -> Contains a Constuctor and an Update Method();
+// Renderable   -> Renders Component to Threejs
+// Rigidbody    -> Physics Component updates everyframe from Matterjs
+namespace ECS {
+
+    type EntityId = string;
+
+    export class World {
+        public static instance : World = new World();
+        
+        //  ** NOTE **
+        //  Perhaps Switch to Array as there is no need for individual lookup 
+        entities: Map<EntityId, Entity>;
+        
+        constructor(entities: Map<EntityId, Entity> = new Map<EntityId, Entity>()){
+            this.entities = entities;
+        }
+        
+        public get = (id: EntityId) => this.entities.has(id) ? this.entities.get(id) : null;
+        public destroy = (id: EntityId) => this.entities.delete(id);
+    }
+    
+    export class Entity {
+        private static _idCount: number = 0;
+        
+        private id: EntityId = "";
+        private components: Array<Component> = new Array<Component>();
+
+        constructor(world: World = World.instance) {
+            this.id = (+new Date()).toString(16) + (Math.random() * 100000000 | 0).toString(16) + ++Entity._idCount;
+            world.entities.set(this.id, this);
+        }
+
+        AddComponent(c: Component) : any {
+            this.components.push(c);
+            return c;
+        }
+
+        GetComponent(t: any, index: number = 0) : any {
+            return this.GetComponents(t)[index];
+        }
+
+        GetComponents(t: any) : Array<any> {
+            return this.components.filter((component) => component instanceof t);
+        }
+
+        HasComponents(t: any): boolean {
+            return this.components.some((component)=>component instanceof t);
+        }
+
+        RemoveComponent(t: any, index: number = 0) : boolean {
+            var component = this.GetComponent(t, index);
+            if(component != null)
+            {
+                this.components.splice(this.components.indexOf(component));
+                return true;
+            }
+            return false;
+        }
+
+        Serialize() : string {
+            return JSON.stringify(this, null, 4);
+        }
+
+        Print() {
+            console.log(this.Serialize());
+        }
+    }
+
+    //  TODO: Edit this class
+    export interface Component{}
+
+    export class RenderComponent implements Component
+    {
+        public name: string = "RenderComponent";
+    }
+
+    export namespace Systems
+    {
+        function* flatten(array: any, depth: number) : any {
+            if(depth === undefined) {
+              depth = 1;
+            }
+            for(const item of array) {
+                if(Array.isArray(item) && depth > 0) {
+                  yield* flatten(item, depth - 1);
+                } else {
+                  yield item;
+                }
+            }
+        }
+
+        export const GetAllComponents = <T>(entities: Array<Entity>, t: any) : T[] => flatten(entities.filter(entity=>entity.HasComponents(t)).map(entity=>entity.GetComponents(t)), 1);
+
+        export const Render = (entities: Array<Entity>) =>  {
+            var RenderComponents = GetAllComponents<RenderComponent>(entities, RenderComponent);
+            for(var render of RenderComponents)
+            {
+                console.log(render.name);
+            }
+        }
+    }
+}
+
+//  Shape Might Change to Component Object Model Architecture 
+class Shape {
     mesh: THREE.Mesh;
-    physicsBody: Matter.Body;
-
-    constructor() {
-        shapes.push(this);
-    }
-
-    update = () => {
-        this.mesh.position.set(this.physicsBody.position.x, this.physicsBody.position.y, 0);
-    }
-
+    constructor() { shapes.push(this); }
+    update = () => { }
     setLayerIndex = (layer: number) => this.mesh.position.z = layer;
 }
 
-class Rectangle extends Shape
-{
-    constructor(size: THREE.Vector2, position: THREE.Vector2, material: THREE.Material = _defaults.material)
-    {
+//  Physics Shape Extends Shape
+//  Allows For Matterjs Physics
+class PhysicsShape extends Shape {
+    physicsBody: Matter.Body;
+    constructor(physics: Matter.IBodyDefinition) {
         super();
-        let geometry = new THREE.BoxGeometry(size.x, size.y, 0.000001);
-        this.mesh = new THREE.Mesh(geometry, material);
-        this.mesh.position.set(position.x, position.y, 0);
-        this.physicsBody = Matter.Bodies.rectangle(position.x, position.y, size.x, size.y);
+        this.physicsBody = Matter.Body.create(physics);
+    }
+    update = () => {
+        this.mesh.position.set(this.physicsBody.position.x, this.physicsBody.position.y, 0);
     }
 }
 
-class Circle extends Shape
-{
-    constructor(radius: number, position: THREE.Vector2, material: THREE.Material = _defaults.material)
-    {
-        super();
+class Circle extends PhysicsShape {
+    constructor(radius: number, position: THREE.Vector2, physics?: Matter.IBodyDefinition, material: THREE.Material = _defaults.material) {
+        super(physics);
         let geometry = new THREE.CircleGeometry(radius, 24);
         this.mesh = new THREE.Mesh(geometry, material);
         this.mesh.position.set(position.x, position.y, 0);
@@ -72,11 +164,9 @@ class Circle extends Shape
     }
 }
 
-class Polygon extends Shape
-{
-    constructor(points: Array<THREE.Vector2>, position: THREE.Vector2, material: THREE.Material = _defaults.material)
-    {
-        super();
+class Polygon extends PhysicsShape {
+    constructor(points: Array<THREE.Vector2>, position: THREE.Vector2, physics?: Matter.IBodyDefinition, material: THREE.Material = _defaults.material) {
+        super(physics);
         let shape = new THREE.Shape(points);
         let geometry = new THREE.ShapeGeometry(shape);
         this.mesh = new THREE.Mesh(geometry, material);
@@ -86,29 +176,39 @@ class Polygon extends Shape
     }
 }
 
+class Rectangle extends PhysicsShape {
+    constructor(size: THREE.Vector2, position: THREE.Vector2, physics?: Matter.IBodyDefinition, material: THREE.Material = _defaults.material) {
+        super(physics);
+        let geometry = new THREE.BoxGeometry(size.x, size.y, 0.000001);
+        this.mesh = new THREE.Mesh(geometry, material);
+        this.mesh.position.set(position.x, position.y, 0);
+        this.physicsBody = Matter.Bodies.rectangle(position.x, position.y, size.x, size.y);
+    }
+}
+
 // class RenderableShape
 // {
 //     static renderables: Array<RenderableShape> = [];
-    
+
 //     geometry: THREE.ShapeBufferGeometry;
 //     mesh: THREE.Mesh;
 //     refMatterBody: Matter.Body;
 
 //     constructor(matterBody: Matter.Body, physicsWorld: Matter.World, scene: THREE.Scene, material: THREE.Material = new THREE.MeshPhongMaterial({color: 0xffffff}), sortingLayer: number = 0) {
 //         this.refMatterBody = matterBody;
-        
+
 //         Matter.World.addBody(physicsWorld, matterBody);
-        
+
 //         let shape = new THREE.Shape(Utils.vectorConvert(matterBody.vertices));
 
 //         console.log(shape);
-        
+
 //         this.geometry = new THREE.ShapeBufferGeometry(shape);
-        
+
 //         this.mesh = new THREE.Mesh(this.geometry, material);
 //         this.mesh.position.z = sortingLayer;
 //         scene.add(this.mesh);
-        
+
 //         RenderableShape.renderables.push(this);
 //     }
 
@@ -123,7 +223,7 @@ class Polygon extends Shape
 // }
 
 const _defaults = {
-    material: new THREE.MeshBasicMaterial({color: 0xffffff, wireframe: true})
+    material: new THREE.MeshBasicMaterial({ color: 0xffffff, wireframe: true })
 }
 
 var camera: THREE.PerspectiveCamera;
@@ -166,7 +266,7 @@ function init() {
     Matter.Engine.run(engine);
     engine.world.gravity.scale = 1;
 
-    scene.add(new Circle(1, new THREE.Vector2(-2,0)).mesh);
+    scene.add(new Circle(1, new THREE.Vector2(-2, 0)).mesh);
     scene.add(new Polygon([
         new THREE.Vector2(-1, -1),
         new THREE.Vector2(1, -1),
@@ -238,12 +338,19 @@ function init() {
     composer = new THREE_EffectComposer(renderer);
     composer.addPass(renderPass);
     composer.addPass(bloomPass);
+
+    //ECS Experiment
+    var entity = new ECS.Entity();
+    entity.AddComponent(new ECS.RenderComponent());
 }
 
 function draw() {
     requestAnimationFrame(draw);
-    for(var shape of shapes) shape.update();
+    for (var shape of shapes) shape.update();
     composer.render();
+    
+    // Trying ECS system
+    ECS.Systems.Render([...ECS.World.instance.entities.values()]);
 }
 
 remote.getCurrentWindow().on("resize", () => {
