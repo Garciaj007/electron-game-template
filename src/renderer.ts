@@ -9,6 +9,7 @@ import { remote } from 'electron';
 import { EffectComposer as THREE_EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer';
 import { RenderPass as THREE_RenderPass } from 'three/examples/jsm/postprocessing/RenderPass';
 import { UnrealBloomPass as THREE_BloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass';
+import { Material } from 'three';
 
 class Utils {
     static random = (x: number, y: number): number => {
@@ -28,6 +29,12 @@ class Utils {
     }
 };
 
+
+const _defaults = {
+    geometry: new THREE.CircleGeometry(1, 20),
+    material: new THREE.MeshBasicMaterial({ color: 0xffffff, wireframe: true })
+}
+
 // Component Model Architecure
 // Component    -> Contains a Constuctor and an Update Method();
 // Renderable   -> Renders Component to Threejs
@@ -36,102 +43,165 @@ namespace ECS {
 
     type EntityId = string;
 
+    function* flatten(array: any, depth: number): any {
+        if (depth === undefined) {
+            depth = 1;
+        }
+        for (const item of array) {
+            if (Array.isArray(item) && depth > 0) {
+                yield* flatten(item, depth - 1);
+            } else {
+                yield item;
+            }
+        }
+    }
+
     export class World {
-        public static instance : World = new World();
+        static instance: World = new World();
+
+        static getEntities = (t: any, world: World = World.instance): Entity[] => World.decompEntities(world).filter(entity => entity.hasComponent(t));
+        static getComponents = <T>(t: any, world: World = World.instance): T[] => flatten(World.decompEntities(world).filter(entity => entity.hasComponent(t)).map(entity => entity.getComponents(t)), 1);
+            
+        private static decompEntities = (world: World) : Entity[] => [...world.entities.values()];
         
-        //  ** NOTE **
-        //  Perhaps Switch to Array as there is no need for individual lookup 
-        entities: Map<EntityId, Entity>;
-        
-        constructor(entities: Map<EntityId, Entity> = new Map<EntityId, Entity>()){
+        private entities: Map<EntityId, Entity>;
+
+        constructor(entities: Map<EntityId, Entity> = new Map<EntityId, Entity>()) {
             this.entities = entities;
         }
-        
-        public get = (id: EntityId) => this.entities.has(id) ? this.entities.get(id) : null;
-        public destroy = (id: EntityId) => this.entities.delete(id);
+
+        default = () => World.instance = this;
+        addEntity = (entity: Entity) => this.entities.set(entity.getId(), entity);
+        getEntity = (id: EntityId) => this.entities.has(id) ? this.entities.get(id) : null;
+        destroyEntity = (id: EntityId) => this.entities.delete(id);
     }
-    
+
     export class Entity {
         private static _idCount: number = 0;
-        
+
         private id: EntityId = "";
-        private components: Array<Component> = new Array<Component>();
+        private components: Array<any> = new Array<any>();
 
         constructor(world: World = World.instance) {
             this.id = (+new Date()).toString(16) + (Math.random() * 100000000 | 0).toString(16) + ++Entity._idCount;
-            world.entities.set(this.id, this);
+            world.addEntity(this);
         }
 
-        AddComponent(c: Component) : any {
+        getId = () => this.id;
+
+        addComponent<T>(c: any): T {
             this.components.push(c);
             return c;
         }
 
-        GetComponent(t: any, index: number = 0) : any {
-            return this.GetComponents(t)[index];
+        getComponent<T>(t: any, index: number = 0): T {
+            return this.getComponents<T>(t)[index];
         }
 
-        GetComponents(t: any) : Array<any> {
+        getComponents<T>(t: any): Array<T> {
             return this.components.filter((component) => component instanceof t);
         }
 
-        HasComponents(t: any): boolean {
-            return this.components.some((component)=>component instanceof t);
+        hasComponent(t: any): boolean {
+            return this.components.some((component) => component instanceof t);
         }
 
-        RemoveComponent(t: any, index: number = 0) : boolean {
-            var component = this.GetComponent(t, index);
-            if(component != null)
-            {
+        removeComponent(t: any, index: number = 0): boolean {
+            var component = this.getComponent(t, index);
+            if (component != null) {
                 this.components.splice(this.components.indexOf(component));
                 return true;
             }
             return false;
         }
 
-        Serialize() : string {
+        serialize(): string {
             return JSON.stringify(this, null, 4);
         }
 
-        Print() {
-            console.log(this.Serialize());
+        print() {
+            console.log(this.serialize());
         }
     }
 
-    //  TODO: Edit this class
-    export interface Component{}
+    export interface Component { }
 
-    export class RenderComponent implements Component
-    {
-        public name: string = "RenderComponent";
+    export namespace Components {
+        export class Render implements Component {
+            mesh: THREE.Mesh;
+        }
+    
+        export class Rigidbody implements Component {
+            body: Matter.Body;
+        }
     }
-
-    export namespace Systems
-    {
-        function* flatten(array: any, depth: number) : any {
-            if(depth === undefined) {
-              depth = 1;
+    
+    export namespace Systems {
+        export function Render() {
+            let renderEntities = World.getEntities(Components.Render);
+            for (var entity of renderEntities) {
+    
             }
-            for(const item of array) {
-                if(Array.isArray(item) && depth > 0) {
-                  yield* flatten(item, depth - 1);
-                } else {
-                  yield item;
+        }
+    
+        export function Physics(){
+            let rigidEntities = World.getEntities(Components.Rigidbody);
+            for (let entity of rigidEntities) {
+                let rigid = entity.getComponent<Components.Rigidbody>(Components.Rigidbody);
+                let render = entity.getComponent<Components.Render>(Components.Render);
+                if(render != null) {
+                    render.mesh.position.set(rigid.body.position.x, rigid.body.position.y, 0);
                 }
             }
         }
+    }
 
-        export const GetAllComponents = <T>(entities: Array<Entity>, t: any) : T[] => flatten(entities.filter(entity=>entity.HasComponents(t)).map(entity=>entity.GetComponents(t)), 1);
-
-        export const Render = (entities: Array<Entity>) =>  {
-            var RenderComponents = GetAllComponents<RenderComponent>(entities, RenderComponent);
-            for(var render of RenderComponents)
-            {
-                console.log(render.name);
+    export namespace Archetypes {
+        export class RenderShapeParameter {
+            geometry: THREE.Geometry;
+            material: THREE.Material;
+            position: THREE.Vector3;
+            constructor(geometry: THREE.Geometry = _defaults.geometry, material: THREE.Material = _defaults.material, position?: THREE.Vector3){
+                this.geometry = geometry;
+                this.material = material;
+                this.position = position;
             }
+        }
+
+        export function RenderShape(renderShapeParams?: RenderShapeParameter) : Entity{
+            var entity = new Entity();
+            var render = entity.addComponent<Components.Render>(Components.Render);
+            render.mesh = new THREE.Mesh(renderShapeParams.geometry, renderShapeParams.material);
+            render.mesh.position.set(renderShapeParams.position.x, renderShapeParams.position.y, renderShapeParams.position.z);
+            return entity;
+        }
+
+        //  Eliminate this function?
+        // export function RigidShape(rigidbodyProperties?: Matter.IBodyDefinition, renderShapeParams?: RenderShapeParameter) : Entity {
+        //     var entity = RenderShape(renderShapeParams);
+        //     var rigid = entity.addComponent<Components.Rigidbody>(Components.Rigidbody);
+        //     var render = entity.getComponent<Components.Render>(Components.Render);
+        //     rigid.body = Matter.Body.create(rigidbodyProperties);
+        //     render.mesh.position.set(rigidbodyProperties.position.x, rigidbodyProperties.position.y, 0);
+        //     return entity;
+        // }
+
+        export function RigidCircle(radius: number, rigidbodyProperties?: Matter.IBodyDefinition, material?: THREE.Material, sortingLayer?: number) : Entity {
+            var entity = RenderShape(new RenderShapeParameter(new THREE.CircleGeometry(radius, 24), material, new THREE.Vector3(rigidbodyProperties.position.x, rigidbodyProperties.position.y, sortingLayer)));
+            var rigid = entity.addComponent<Components.Rigidbody>(Components.Rigidbody);
+            rigid.body = Matter.Bodies.circle(rigidbodyProperties.position.x, rigidbodyProperties.position.y, radius, rigidbodyProperties);
+            return entity;
+        }
+
+        export function RigidPolygon(radius: number, rigidbodyProperties?: Matter.IBodyDefinition, material?: THREE.Material, sortingLayer?: number) : Entity {
+            var entity = RenderShape(new RenderShapeParameter(new THREE.CircleGeometry(radius, 24), material, new THREE.Vector3(rigidbodyProperties.position.x, rigidbodyProperties.position.y, sortingLayer)));
+            var rigid = entity.addComponent<Components.Rigidbody>(Components.Rigidbody);
+            rigid.body = Matter.Bodies.circle(rigidbodyProperties.position.x, rigidbodyProperties.position.y, radius, rigidbodyProperties);
+            return entity;
         }
     }
 }
+
 
 //  Shape Might Change to Component Object Model Architecture 
 class Shape {
@@ -186,46 +256,6 @@ class Rectangle extends PhysicsShape {
     }
 }
 
-// class RenderableShape
-// {
-//     static renderables: Array<RenderableShape> = [];
-
-//     geometry: THREE.ShapeBufferGeometry;
-//     mesh: THREE.Mesh;
-//     refMatterBody: Matter.Body;
-
-//     constructor(matterBody: Matter.Body, physicsWorld: Matter.World, scene: THREE.Scene, material: THREE.Material = new THREE.MeshPhongMaterial({color: 0xffffff}), sortingLayer: number = 0) {
-//         this.refMatterBody = matterBody;
-
-//         Matter.World.addBody(physicsWorld, matterBody);
-
-//         let shape = new THREE.Shape(Utils.vectorConvert(matterBody.vertices));
-
-//         console.log(shape);
-
-//         this.geometry = new THREE.ShapeBufferGeometry(shape);
-
-//         this.mesh = new THREE.Mesh(this.geometry, material);
-//         this.mesh.position.z = sortingLayer;
-//         scene.add(this.mesh);
-
-//         RenderableShape.renderables.push(this);
-//     }
-
-//     Update() {
-//         this.mesh.position.set(this.refMatterBody.position.x, this.refMatterBody.position.y, this.mesh.position.z);
-//         this.mesh.quaternion.setFromAxisAngle(new THREE.Vector3(0, 0, 1), this.refMatterBody.angle);
-//     }
-
-//     static Update() {
-//         this.renderables.forEach((element)=>{element.Update();});
-//     }
-// }
-
-const _defaults = {
-    material: new THREE.MeshBasicMaterial({ color: 0xffffff, wireframe: true })
-}
-
 var camera: THREE.PerspectiveCamera;
 var scene: THREE.Scene;
 var renderer: THREE.WebGLRenderer;
@@ -272,7 +302,7 @@ function init() {
         new THREE.Vector2(1, -1),
         new THREE.Vector2(1, 1),
         new THREE.Vector2(-1, 1)
-    ], new THREE.Vector2(2, 0)).mesh);
+    ],  new THREE.Vector2(2, 0)).mesh);
     //scene.add(new Rectangle(new THREE.Vector2(2, 2), new THREE.Vector2(3, 0)).mesh);
 
     // anime({
@@ -341,16 +371,18 @@ function init() {
 
     //ECS Experiment
     var entity = new ECS.Entity();
-    entity.AddComponent(new ECS.RenderComponent());
+    entity.addComponent(new ECS.Components.Render());
+    entity.addComponent(new ECS.Components.Rigidbody());
 }
 
 function draw() {
     requestAnimationFrame(draw);
     for (var shape of shapes) shape.update();
     composer.render();
-    
+
     // Trying ECS system
-    ECS.Systems.Render([...ECS.World.instance.entities.values()]);
+    ECS.Systems.Physics();
+    ECS.Systems.Render();
 }
 
 remote.getCurrentWindow().on("resize", () => {
