@@ -35,7 +35,7 @@ export class Graphics {
     renderer?: THREE.WebGLRenderer;
     composer?: THREE_EffectComposer;
 
-    constructor() {
+    private constructor() {
         this.resolution = new THREE.Vector2(remote.getCurrentWindow().getSize()[0], remote.getCurrentWindow().getSize()[1]);
 
         this.renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -71,17 +71,12 @@ export class Physics {
     }
 }
 
-
 const _defaults = {
     geometry: new THREE.CircleGeometry(1, 20),
     wireframeMat: new THREE.MeshBasicMaterial({ color: 0x444444, wireframe: true }),
     basicMat: new THREE.MeshBasicMaterial({ color:0xffffff })
 }
 
-// Component Model Architecure
-// Component    -> Contains a Constuctor and an Update Method();
-// Renderable   -> Renders Component to Threejs
-// Rigidbody    -> Physics Component updates everyframe from Matterjs
 namespace ECS {
 
     type EntityId = string;
@@ -271,47 +266,88 @@ namespace ECS {
     }
 
     export namespace Archetypes {
-        export class RenderShapeParameter {
-            geometry: THREE.Geometry;
-            material: THREE.Material;
-            position: THREE.Vector3;
-            constructor(geometry: THREE.Geometry = _defaults.geometry, material: THREE.Material = _defaults.wireframeMat, position: THREE.Vector3 = new THREE.Vector3()) {
-                this.geometry = geometry;
-                this.material = material;
-                this.position = position;
-            }
+
+        export interface IShapeDefinition {
+            /**
+             * @property shape
+             * @type THREE.Shape
+             */
+            shape?: THREE.Shape;
+            /**
+             * @property material
+             * @type THREE.Material
+             * @default _defaults.basicMat
+             */
+            material?: THREE.Material;
         }
 
-        export function RenderShape(renderShapeParams?: RenderShapeParameter): Entity {
+        export interface IRigidShapeDefinition extends IShapeDefinition {
+            /**
+             * @property physics
+             * @type Matter.IBodyDefinition
+             */
+            physics?: Matter.IBodyDefinition;
+        }
+
+        export function CreateShape(args: IShapeDefinition): Entity {
             var entity = new Entity();
-            var render = entity.addComponent<Components.Render>(Components.Render);
-            render.mesh = new THREE.Mesh(renderShapeParams.geometry, renderShapeParams.material);
-            render.mesh.position.set(renderShapeParams.position.x, renderShapeParams.position.y, renderShapeParams.position.z);
+            var geometry = new THREE.ShapeBufferGeometry(args.shape);
+            entity.createComponent(Components.Render, new THREE.Mesh(geometry, args.material));
             return entity;
         }
 
-        export function RigidShape(rigidbodyProperties?: Matter.IBodyDefinition, renderShapeParams?: RenderShapeParameter): Entity {
-            var entity = RenderShape(renderShapeParams);
-            var render = entity.getComponent<Components.Render>(Components.Render);
-            //var rigid = entity.addComponent<Components.Rigidbody>(Components.Rigidbody);
-            //rigid.body = Matter.Body.create(rigidbodyProperties);
-            render.mesh.position.set(rigidbodyProperties.position.x, rigidbodyProperties.position.y, 0);
+        export function CreateRigidShape(args: IRigidShapeDefinition): Entity {
+            var entity = new Entity();
+            var geometry = new THREE.ShapeGeometry(args.shape);
+            console.log(geometry.vertices);
+            entity.createComponent(Components.Render, new THREE.Mesh(geometry, args.material));
+            var rigidComponent = entity.createComponent<Components.Rigidbody>(Components.Rigidbody, Matter.Body.create(args.physics));
+            rigidComponent.body.vertices = Matter.Vertices.create(geometry.vertices, rigidComponent.body);
             return entity;
         }
+    }
+}
 
-        // export function RigidCircle(radius: number, rigidbodyProperties?: Matter.IBodyDefinition, material?: THREE.Material, sortingLayer?: number): Entity {
-        //     var entity = RenderShape(new RenderShapeParameter(new THREE.CircleGeometry(radius, 24), material, new THREE.Vector3(rigidbodyProperties.position.x, rigidbodyProperties.position.y, sortingLayer)));
-        //     var rigid = entity.addComponent<Components.Rigidbody>(Components.Rigidbody);
-        //     rigid.body = Matter.Bodies.circle(rigidbodyProperties.position.x, rigidbodyProperties.position.y, radius, rigidbodyProperties);
-        //     return entity;
-        // }
+export namespace Shapes
+{
+    export function Triangle(a?: THREE.Vector2, b?: THREE.Vector2, c?: THREE.Vector2): THREE.Shape
+    {
+        return new THREE.Shape().moveTo(a.x, a.y).lineTo(b.x, b.y)
+                                .lineTo(c.x, c.y).lineTo(a.x, a.y);
+    } 
 
-        // export function RigidPolygon(radius: number, rigidbodyProperties?: Matter.IBodyDefinition, material?: THREE.Material, sortingLayer?: number): Entity {
-        //     var entity = RenderShape(new RenderShapeParameter(new THREE.CircleGeometry(radius, 24), material, new THREE.Vector3(rigidbodyProperties.position.x, rigidbodyProperties.position.y, sortingLayer)));
-        //     var rigid = entity.addComponent<Components.Rigidbody>(Components.Rigidbody);
-        //     rigid.body = Matter.Bodies.circle(rigidbodyProperties.position.x, rigidbodyProperties.position.y, radius, rigidbodyProperties);
-        //     return entity;
-        // }
+    export function EqualTriangle(size: number): THREE.Shape
+    {
+        return Triangle(new THREE.Vector2(-1, -1).normalize().multiplyScalar(size),
+                        new THREE.Vector2( 1, -1).normalize().multiplyScalar(size),
+                        new THREE.Vector2( 0,  0.5).multiplyScalar(size));
+    }
+
+    export function Rectangle(a?: THREE.Vector2 | number, b?: THREE.Vector2 | number, c?: THREE.Vector2, d?: THREE.Vector2): THREE.Shape
+    {
+        if (typeof a == 'number' && typeof b == 'number')
+        {
+            return Rectangle(new THREE.Vector2(-0.5, -0.5).multiply(new THREE.Vector2(a, b)),
+                             new THREE.Vector2( 0.5, -0.5).multiply(new THREE.Vector2(a, b)),
+                             new THREE.Vector2( 0.5,  0.5).multiply(new THREE.Vector2(a, b)),
+                             new THREE.Vector2(-0.5,  0.5).multiply(new THREE.Vector2(a, b)));
+        }
+        else if (a instanceof THREE.Vector2 && b instanceof THREE.Vector2)
+        {
+            return new THREE.Shape().moveTo(a.x, a.y).lineTo(b.x, b.y)
+                                    .lineTo(c.x, c.y).lineTo(d.x, d.y)
+                                    .lineTo(d.x, d.y);
+        }
+    }
+
+    export function Square(size: number): THREE.Shape { return Rectangle(size, size); }
+
+    export function Capsule(w: number, h: number): THREE.Shape
+    {
+        return new THREE.Shape().moveTo(-w/2, -h/2).lineTo(-w/2, h/2)
+                                .absarc(0, h/2, w/2, Math.PI, 0, true)
+                                .lineTo(w/2, -h/2)
+                                .absarc(0, -h/2, w/2, 2 * Math.PI, Math.PI, true)
     }
 }
 
@@ -356,7 +392,7 @@ class Polygon extends PhysicsShape {
         this.mesh = new THREE.Mesh(geometry, material);
         this.mesh.position.set(position.x, position.y, 0);
         this.physicsBody = Matter.Body.create({});
-        Matter.Vertices.create(points, this.physicsBody);
+        this.physicsBody.vertices = Matter.Vertices.create(points, this.physicsBody);
     }
 }
 //#endregion
@@ -433,16 +469,24 @@ function init() {
     // });
     //#endregion
 
-    console.time();
-    for(let i = 0; i < 20000; i++)
-    {
-        var entity = new ECS.Entity();
-        entity.createComponent(ECS.Components.Render, new THREE.Mesh(new THREE.CircleBufferGeometry(1, 32), _defaults.basicMat));
-        entity.createComponent(ECS.Components.Velocity, new THREE.Vector3(Utils.random(-2, 2), Utils.random(-1, 1)));
-        //entity.createComponent(ECS.Components.Rigidbody, Matter.Bodies.circle(Utils.random(-40, 40), Utils.random(500, 0), 1));
-        ECS.World.instance.attachToScene(entity);
-    }
-    console.timeEnd();
+    // console.time();
+    // for(let i = 0; i < 10000; i++)
+    // {
+    //     var entity = new ECS.Entity();
+    //     entity.createComponent(ECS.Components.Render, new THREE.Mesh(new THREE.CircleBufferGeometry(1, 32), _defaults.basicMat));
+    //     entity.createComponent(ECS.Components.Velocity, new THREE.Vector3(Utils.random(-2, 2), Utils.random(-1, 1)));
+    //     //entity.createComponent(ECS.Components.Rigidbody, Matter.Bodies.circle(Utils.random(-40, 40), Utils.random(500, 0), 1));
+    //     ECS.World.instance.attachToScene(entity);
+    // }
+    // console.timeEnd();
+
+    var groundEntity = ECS.Archetypes.CreateRigidShape({shape: Shapes.Rectangle(50, 2)});
+    var rc = groundEntity.getComponent<ECS.Components.Rigidbody>(ECS.Components.Rigidbody);
+    rc.body.position.y = -20;
+    Matter.Body.setStatic(rc.body, true);
+    ECS.World.instance.attachToScene(groundEntity);
+
+    ECS.World.instance.attachToScene(ECS.Archetypes.CreateRigidShape({shape: Shapes.Square(4)}));
 
     var synth = new Tone.Synth();
     synth.toMaster();
